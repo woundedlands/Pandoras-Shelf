@@ -1,6 +1,9 @@
-<h1 style="display: flex; align-items: center;">
-  <img src="docs/logo.png" alt="logo" width="70" style="margin-right: 15px;"> Pandora's Shelf
-</h1>
+<table border="none!important"><tr>
+<td><img src="docs/logo.png" alt="logo" width="70"></td>
+<td><h1>Pandora's Shelf</h1></td>
+</tr></table>
+
+
 
 An HTML launcher with window management and workspaces. Install standalone HTML mini apps, arrange them into flexible layouts, scale them to fit, and organize everything into workspaces.
 
