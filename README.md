@@ -21,8 +21,8 @@ An HTML launcher with window management and workspaces. Install standalone HTML 
 
 ## Get Pandora's Shelf
 
-- **Try it online** — [online demo](https://YOUR_USERNAME.github.io/PandorasShelf/), no install needed.
-- **Download for desktop** — grab the latest Windows app from the [Releases page](https://github.com/YOUR_USERNAME/PandorasShelf/releases).
+- **Try it online** — [online demo](https://woundedlands.github.io/Pandoras-Shelf/), no install needed.
+- **Download** — [Releases page](https://github.com/woundedlands/Pandoras-Shelf/releases).
 
 ## Screenshots
 
