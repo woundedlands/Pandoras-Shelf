@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zip Merger — flatten an archive into one file</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  :root {
+    --bg: #101418;
+    --panel: #171d23;
+    --panel-2: #1d242c;
+    --line: #2a333d;
+    --text: #d7dee6;
+    --muted: #7e8b98;
+    --accent: #5cc8ff;
+    --accent-dim: #2b6f93;
+    --ok: #6fd394;
+    --warn: #e6b45a;
+    --mono: "SF Mono", "Cascadia Code", Consolas, "Liberation Mono", monospace;
+    --sans: "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    padding: 32px 16px 64px;
+  }
+  .app { width: 100%; max-width: 860px; }
+
+  header { margin-bottom: 24px; }
+  header h1 {
+    font-family: var(--mono);
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.5px;
+  }
+  header h1 .path { color: var(--accent); }
+  header p { color: var(--muted); font-size: 14px; margin-top: 6px; }
+
+  .drop {
+    border: 1.5px dashed var(--line);
+    border-radius: 10px;
+    background: var(--panel);
+    padding: 40px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .drop:hover, .drop.over {
+    border-color: var(--accent);
+    background: var(--panel-2);
+  }
+  .drop:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .drop .big { font-size: 15px; }
+  .drop .hint { color: var(--muted); font-size: 13px; margin-top: 6px; font-family: var(--mono); }
+  .drop.loaded { border-style: solid; border-color: var(--accent-dim); }
+  .drop .fname { font-family: var(--mono); color: var(--accent); word-break: break-all; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin-top: 18px;
+  }
+  @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+
+  fieldset {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--panel);
+    padding: 14px 16px 16px;
+  }
+  legend {
+    font-family: var(--mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--muted);
+    padding: 0 6px;
+  }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+  input[type=text] {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    padding: 8px 10px;
+  }
+  input[type=text]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+
+  .radio-row, .check-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13.5px; cursor: pointer; }
+  .radio-row input, .check-row input { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+  .sub { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+
+  .actions { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; align-items: center; }
+  button {
+    font-family: var(--mono);
+    font-size: 14px;
+    padding: 10px 18px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    color: var(--text);
+    cursor: pointer;
+    transition: background .15s, border-color .15s;
+  }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button.primary { background: var(--accent-dim); border-color: var(--accent-dim); color: #eaf6ff; }
+  button.primary:hover:not(:disabled) { background: #33809f; }
+  button:hover:not(:disabled) { border-color: var(--muted); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+
+  .status { font-family: var(--mono); font-size: 13px; color: var(--muted); }
+  .status.ok { color: var(--ok); }
+  .status.warn { color: var(--warn); }
+
+  .filelist {
+    margin-top: 18px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--panel);
+    overflow: hidden;
+    display: none;
+  }
+  .filelist.show { display: block; }
+  .filelist .head {
+    padding: 10px 14px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    justify-content: space-between;
+  }
+  .filelist ul {
+    list-style: none;
+    max-height: 260px;
+    overflow-y: auto;
+    font-family: var(--mono);
+    font-size: 12.5px;
+  }
+  .filelist li {
+    padding: 6px 14px;
+    border-bottom: 1px solid #1c232b;
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .filelist li:last-child { border-bottom: none; }
+  .filelist li .size { color: var(--muted); white-space: nowrap; }
+  .filelist li .nested { color: var(--warn); }
+
+  .preview {
+    margin-top: 18px;
+    display: none;
+  }
+  .preview.show { display: block; }
+  .preview h2 {
+    font-family: var(--mono);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  .preview pre {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.55;
+    max-height: 340px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #c3ccd6;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1><span class="path">zip</span> → merge → <span class="path">one file</span></h1>
+    <p>Drop a zip archive, pick which extensions to keep, get a single merged text file. Nested folders and nested zips are walked to any depth.</p>
+  </header>
+
+  <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose or drop a zip file">
+    <div class="big" id="dropMain">Drop a .zip here or click to browse</div>
+    <div class="hint" id="dropHint">nothing loaded yet</div>
+    <input type="file" id="fileInput" accept=".zip" hidden>
+  </div>
+
+  <div class="grid">
+    <fieldset>
+      <legend>Filter</legend>
+      <label for="exts">Extensions to include (comma-separated, no dots needed)</label>
+      <input type="text" id="exts" value="md" spellcheck="false" placeholder="md, txt, json">
+      <label class="check-row" style="margin-top:12px">
+        <input type="checkbox" id="recurseZips" checked>
+        <span>Unpack nested .zip archives too</span>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>File titles</legend>
+      <label class="radio-row"><input type="radio" name="title" value="md" checked> <span>Markdown heading <span class="sub">## path/file.md</span></span></label>
+      <label class="radio-row"><input type="radio" name="title" value="raw"> <span>Raw separator <span class="sub">=== path/file.md ===</span></span></label>
+      <label class="radio-row"><input type="radio" name="title" value="none"> <span>No titles, content only</span></label>
+      <label for="outName" style="margin-top:12px">Output file name</label>
+      <input type="text" id="outName" value="merged.md" spellcheck="false">
+    </fieldset>
+  </div>
+
+  <div class="actions">
+    <button class="primary" id="mergeBtn" disabled>Merge &amp; download</button>
+    <button id="previewBtn" disabled>Preview</button>
+    <span class="status" id="status"></span>
+  </div>
+
+  <div class="filelist" id="filelist">
+    <div class="head"><span id="flTitle">Matched files</span><span id="flCount"></span></div>
+    <ul id="flItems"></ul>
+  </div>
+
+  <div class="preview" id="previewWrap">
+    <h2>Preview (first 8,000 characters)</h2>
+    <pre id="previewPre"></pre>
+  </div>
+</div>
+
+<script>
+(function () {
+  const drop = document.getElementById('drop');
+  const fileInput = document.getElementById('fileInput');
+  const dropMain = document.getElementById('dropMain');
+  const dropHint = document.getElementById('dropHint');
+  const extsInput = document.getElementById('exts');
+  const recurseZips = document.getElementById('recurseZips');
+  const outName = document.getElementById('outName');
+  const mergeBtn = document.getElementById('mergeBtn');
+  const previewBtn = document.getElementById('previewBtn');
+  const statusEl = document.getElementById('status');
+  const filelist = document.getElementById('filelist');
+  const flItems = document.getElementById('flItems');
+  const flCount = document.getElementById('flCount');
+  const previewWrap = document.getElementById('previewWrap');
+  const previewPre = document.getElementById('previewPre');
+
+  let loadedFile = null;     // the File object
+  let collected = [];        // [{ path, text }]
+  let lastAutoExt = 'md';
+
+  function setStatus(msg, cls) {
+    statusEl.textContent = msg || '';
+    statusEl.className = 'status' + (cls ? ' ' + cls : '');
+  }
+
+  function parseExts() {
+    return extsInput.value
+      .split(',')
+      .map(function (s) { return s.trim().replace(/^\./, '').toLowerCase(); })
+      .filter(function (s) { return s.length > 0; });
+  }
+
+  function extOf(path) {
+    const base = path.split('/').pop();
+    const i = base.lastIndexOf('.');
+    if (i <= 0) { return ''; }
+    return base.slice(i + 1).toLowerCase();
+  }
+
+  function fmtSize(n) {
+    if (n < 1024) { return n + ' B'; }
+    if (n < 1024 * 1024) { return (n / 1024).toFixed(1) + ' KB'; }
+    return (n / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  // Recursively walk a JSZip instance; prefix carries the path of the parent zip.
+  async function walkZip(zip, prefix, exts, allowNested, out, depth) {
+    if (depth > 12) { return; } // sanity limit against zip bombs / cycles
+    const entries = [];
+    zip.forEach(function (relPath, entry) {
+      if (!entry.dir) { entries.push({ relPath: relPath, entry: entry }); }
+    });
+    // stable, human-friendly ordering
+    entries.sort(function (a, b) { return a.relPath.localeCompare(b.relPath); });
+
+    for (const item of entries) {
+      const fullPath = prefix + item.relPath;
+      const ext = extOf(item.relPath);
+
+      if (ext === 'zip' && allowNested) {
+        try {
+          const buf = await item.entry.async('arraybuffer');
+          const inner = await JSZip.loadAsync(buf);
+          await walkZip(inner, fullPath + '!/', exts, allowNested, out, depth + 1);
+        } catch (e) {
+          out.errors.push(fullPath + ' (could not open nested zip)');
+        }
+        continue;
+      }
+
+      if (exts.indexOf(ext) !== -1) {
+        const text = await item.entry.async('string');
+        out.files.push({ path: fullPath, text: text, size: text.length, nested: prefix !== '' });
+      }
+    }
+  }
+
+  async function scan() {
+    if (!loadedFile) { return; }
+    const exts = parseExts();
+    if (exts.length === 0) {
+      setStatus('add at least one extension', 'warn');
+      return;
+    }
+    setStatus('scanning…');
+    mergeBtn.disabled = true;
+    previewBtn.disabled = true;
+    try {
+      const zip = await JSZip.loadAsync(loadedFile);
+      const out = { files: [], errors: [] };
+      await walkZip(zip, '', exts, recurseZips.checked, out, 0);
+      collected = out.files;
+      renderFileList(out);
+      if (collected.length === 0) {
+        setStatus('no .' + exts.join(' / .') + ' files found in archive', 'warn');
+      } else {
+        setStatus(collected.length + ' file' + (collected.length === 1 ? '' : 's') + ' matched', 'ok');
+        mergeBtn.disabled = false;
+        previewBtn.disabled = false;
+      }
+    } catch (e) {
+      setStatus('could not read zip: ' + e.message, 'warn');
+      collected = [];
+      filelist.classList.remove('show');
+    }
+  }
+
+  function renderFileList(out) {
+    flItems.innerHTML = '';
+    for (const f of collected) {
+      const li = document.createElement('li');
+      const name = document.createElement('span');
+      name.textContent = f.path;
+      if (f.nested) { name.classList.add('nested'); name.title = 'from a nested zip'; }
+      const size = document.createElement('span');
+      size.className = 'size';
+      size.textContent = fmtSize(f.size);
+      li.appendChild(name);
+      li.appendChild(size);
+      flItems.appendChild(li);
+    }
+    for (const err of out.errors) {
+      const li = document.createElement('li');
+      li.innerHTML = '<span class="nested"></span>';
+      li.firstChild.textContent = '⚠ ' + err;
+      flItems.appendChild(li);
+    }
+    flCount.textContent = collected.length + ' matched';
+    filelist.classList.toggle('show', collected.length > 0 || out.errors.length > 0);
+  }
+
+  function titleMode() {
+    return document.querySelector('input[name=title]:checked').value;
+  }
+
+  function buildOutput() {
+    const mode = titleMode();
+    const parts = [];
+    for (const f of collected) {
+      let block = '';
+      if (mode === 'md') {
+        block = '## ' + f.path + '\n\n' + f.text.replace(/\s+$/, '') + '\n';
+      } else if (mode === 'raw') {
+        block = '=== ' + f.path + ' ===\n\n' + f.text.replace(/\s+$/, '') + '\n';
+      } else {
+        block = f.text.replace(/\s+$/, '') + '\n';
+      }
+      parts.push(block);
+    }
+    return parts.join('\n');
+  }
+
+  function doMerge() {
+    if (collected.length === 0) { return; }
+    const content = buildOutput();
+    const name = outName.value.trim() || 'merged.md';
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+    setStatus('downloaded ' + name + ' (' + fmtSize(content.length) + ')', 'ok');
+  }
+
+  function doPreview() {
+    if (collected.length === 0) { return; }
+    const content = buildOutput();
+    previewPre.textContent = content.slice(0, 8000) + (content.length > 8000 ? '\n\n… (' + fmtSize(content.length - 8000) + ' more)' : '');
+    previewWrap.classList.add('show');
+    previewWrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function acceptFile(file) {
+    if (!file) { return; }
+    if (!/\.zip$/i.test(file.name)) {
+      setStatus('that is not a .zip file', 'warn');
+      return;
+    }
+    loadedFile = file;
+    drop.classList.add('loaded');
+    dropMain.innerHTML = 'Loaded: <span class="fname"></span>';
+    dropMain.querySelector('.fname').textContent = file.name;
+    dropHint.textContent = fmtSize(file.size) + ' — drop another zip to replace';
+    previewWrap.classList.remove('show');
+    scan();
+  }
+
+  // If user changes extensions, keep the output filename extension in sync
+  // (only if they haven't customized the name beyond "merged.<ext>")
+  extsInput.addEventListener('change', function () {
+    const exts = parseExts();
+    const first = exts[0] || 'md';
+    if (outName.value === 'merged.' + lastAutoExt) {
+      outName.value = 'merged.' + first;
+    }
+    lastAutoExt = first;
+    if (loadedFile) { scan(); }
+  });
+  recurseZips.addEventListener('change', function () {
+    if (loadedFile) { scan(); }
+  });
+
+  drop.addEventListener('click', function () { fileInput.click(); });
+  drop.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
+  });
+  fileInput.addEventListener('change', function () { acceptFile(fileInput.files[0]); });
+
+  ['dragenter', 'dragover'].forEach(function (ev) {
+    drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('over'); });
+  });
+  ['dragleave', 'drop'].forEach(function (ev) {
+    drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('over'); });
+  });
+  drop.addEventListener('drop', function (e) {
+    acceptFile(e.dataTransfer.files[0]);
+  });
+
+  mergeBtn.addEventListener('click', doMerge);
+  previewBtn.addEventListener('click', doPreview);
+})();
+</script>
+</body>
+</html>

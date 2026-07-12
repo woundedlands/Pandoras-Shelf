@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Procedural 3D Dice Roller</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #050508; color: #fff; }
+        
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: transparent;
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+            padding: 10px;
+            border-radius: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            z-index: 10;
+            border: none;
+            box-shadow: none;
+            max-width: 340px;
+        }
+        
+        button {
+            padding: 10px 16px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            background: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            color: #eee;
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 8px;
+            transition: all 0.2s;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.9);
+        }
+        button:hover { background: rgba(255,255,255,0.15); transform: translateY(-1px); }
+        button:active { transform: translateY(1px); }
+        
+        #result {
+            margin-top: 10px;
+            font-size: 24px;
+            font-weight: 800;
+            color: #ffd700;
+            min-height: 30px;
+            text-shadow: 
+                0 2px 4px rgba(0,0,0,1), 
+                0 0px 8px rgba(0,0,0,0.8),
+                1px 1px 0 rgba(0,0,0,0.8),
+                -1px -1px 0 rgba(0,0,0,0.8);
+            transform-origin: left center;
+        }
+        
+        @keyframes resultPop {
+            0% { transform: scale(0.8); opacity: 0; filter: blur(4px); }
+            50% { transform: scale(1.05); filter: blur(0px); }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .pop-anim { animation: resultPop 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+
+        input {
+            padding: 10px;
+            font-size: 14px;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.15);
+            background: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            color: white;
+            width: 140px;
+            outline: none;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.9);
+        }
+        input:focus { border-color: rgba(255,215,0,0.5); }
+        .btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
+    </style>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+</head>
+<body>
+    <div id="ui">
+        <div class="btn-group">
+            <button onclick="rollNotation('2d6')">2d6</button>
+            <button onclick="rollNotation('3d6')">3d6</button>
+            <button onclick="rollNotation('d20')">d20</button>
+            <button onclick="rollNotation('Adv')">Adv</button>
+            <button onclick="rollNotation('Dis')">Dis</button>
+            <button onclick="rollNotation('4d6 dl')">4d6 dl</button>
+            <button onclick="rollNotation('d7')">d7</button>
+            <button onclick="rollNotation('d100')">d100</button>
+        </div>
+        <div style="display: flex; gap: 8px;">
+            <input type="text" id="customInput" placeholder="Custom (e.g. 1d12)" value="2d10">
+            <button onclick="rollNotation(document.getElementById('customInput').value)">Roll</button>
+        </div>
+        <div id="result">Ready to roll</div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        let scene, camera, renderer;
+        let neonLeft, neonRight, neonBack;
+        let dice = [];
+        let pendingDice = 0;
+        let results = [];
+        let currentConfig = null;
+        
+        let animationFrameId = null;
+        let isAnimating = false;
+        let shakeIntensity = 0;
+        let cooldownTime = 0;
+        const originalCamPos = new THREE.Vector3(0, 16, 10);
+        
+        const clock = new THREE.Clock();
+
+        const easeInQuad = t => t * t;
+        const easeOutQuint = t => 1 - Math.pow(1 - t, 5);
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x050508, 0.018);
+
+            camera = new THREE.PerspectiveCamera(20, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.copy(originalCamPos);
+            camera.lookAt(0, 0, 0);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.2; 
+            document.body.appendChild(renderer.domElement);
+
+            const bgCanvas = document.createElement('canvas');
+            bgCanvas.width = 1024; bgCanvas.height = 1024;
+            const bgCtx = bgCanvas.getContext('2d');
+            const gradient = bgCtx.createRadialGradient(512, 512, 0, 512, 512, 512);
+            gradient.addColorStop(0, '#1a1a25');
+            gradient.addColorStop(0.6, '#0a0a10');
+            gradient.addColorStop(1, '#020204');
+            bgCtx.fillStyle = gradient;
+            bgCtx.fillRect(0, 0, 1024, 1024);
+            
+            const imageData = bgCtx.getImageData(0, 0, 1024, 1024);
+            const data = imageData.data;
+            for (let i = 0; i < data.length; i += 4) {
+                const noise = (Math.random() - 0.5) * 12;
+                data[i] = Math.min(255, Math.max(0, data[i] + noise));
+                data[i+1] = Math.min(255, Math.max(0, data[i+1] + noise));
+                data[i+2] = Math.min(255, Math.max(0, data[i+2] + noise));
+            }
+            bgCtx.putImageData(imageData, 0, 0);
+            scene.background = new THREE.CanvasTexture(bgCanvas);
+
+            // Dimmed by 15% (Original: 0.4)
+            const ambientLight = new THREE.AmbientLight(0x404050, 0.34);
+            scene.add(ambientLight);
+
+            // Dimmed by 15% (Original: 1.5)
+            const keyLight = new THREE.DirectionalLight(0xffffff, 1.275);
+            keyLight.position.set(5, 15, 10);
+            keyLight.castShadow = true;
+            keyLight.shadow.mapSize.width = 2048;
+            keyLight.shadow.mapSize.height = 2048;
+            keyLight.shadow.camera.near = 0.5;
+            keyLight.shadow.camera.far = 50;
+            keyLight.shadow.bias = -0.0005;
+            scene.add(keyLight);
+
+            // Dimmed by 15% (Original: 1200)
+            neonLeft = new THREE.PointLight(0x00aaff, 1020, 80, 1.5); 
+            neonLeft.position.set(-15, 8, -5);
+            scene.add(neonLeft);
+
+            // Dimmed by 15% (Original: 1200)
+            neonRight = new THREE.PointLight(0xff0055, 1020, 80, 1.5); 
+            neonRight.position.set(15, 8, -5);
+            scene.add(neonRight);
+
+            // Dimmed by 15% (Original: 800)
+            neonBack = new THREE.PointLight(0x8800ff, 680, 100, 1.5); 
+            neonBack.position.set(0, 10, -25);
+            scene.add(neonBack);
+
+            const floorGeo = new THREE.PlaneGeometry(500, 500);
+            const floorNoise = createOptimizedNoiseTexture();
+            
+            const floorMat = new THREE.MeshStandardMaterial({ 
+                color: 0x1e1e28, 
+                roughness: 0.6, 
+                metalness: 0.1,
+                roughnessMap: floorNoise,
+                bumpMap: floorNoise,
+                bumpScale: 0.015
+            });
+            const floor = new THREE.Mesh(floorGeo, floorMat);
+            floor.rotation.x = -Math.PI / 2;
+            floor.position.y = 0; 
+            floor.receiveShadow = true;
+            scene.add(floor);
+
+            window.addEventListener('resize', onWindowResize, false);
+            renderOnce();
+        }
+
+        function updateCameraForCount(count) {
+            let tier = Math.floor((count - 1) / 3);
+            let z = 10 + tier * 5; 
+            let y = 16 + tier * 8; 
+            
+            originalCamPos.set(0, y, z);
+            camera.position.copy(originalCamPos);
+            camera.lookAt(0, 0, 0);
+        }
+
+        function createOptimizedNoiseTexture() {
+            const size = 512;
+            const canvas = document.createElement('canvas');
+            canvas.width = size; canvas.height = size;
+            const ctx = canvas.getContext('2d');
+            
+            ctx.fillStyle = '#808080';
+            ctx.fillRect(0, 0, size, size);
+            
+            const imageData = ctx.getImageData(0, 0, size, size);
+            const data = imageData.data;
+            for (let i = 0; i < data.length; i += 4) {
+                const noise = (Math.random() - 0.5) * 50; 
+                data[i] += noise;
+                data[i+1] += noise;
+                data[i+2] += noise;
+            }
+            ctx.putImageData(imageData, 0, 0);
+            
+            ctx.filter = 'blur(3px)';
+            ctx.drawImage(canvas, 0, 0);
+            ctx.filter = 'none';
+            
+            for (let i = 0; i < 40; i++) {
+                const x = Math.random() * size;
+                const y = Math.random() * size;
+                const r = Math.random() * 120 + 60;
+                const brightness = Math.random() > 0.5 ? 255 : 0;
+                const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+                grad.addColorStop(0, `rgba(${brightness}, ${brightness}, ${brightness}, 0.06)`);
+                grad.addColorStop(1, 'rgba(128, 128, 128, 0)');
+                ctx.fillStyle = grad;
+                ctx.fillRect(0, 0, size, size);
+            }
+            
+            const tex = new THREE.CanvasTexture(canvas);
+            tex.wrapS = THREE.RepeatWrapping;
+            tex.wrapT = THREE.RepeatWrapping;
+            tex.repeat.set(6, 6); 
+            return tex;
+        }
+
+        function createNumberTexture(num, sides) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 128; canvas.height = 128;
+            const ctx = canvas.getContext('2d');
+            
+            ctx.clearRect(0, 0, 128, 128);
+            
+            ctx.shadowColor = 'rgba(0,0,0,0.8)';
+            ctx.shadowBlur = 6;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 2;
+
+            ctx.fillStyle = '#ffffff';
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 3;
+            ctx.font = 'bold 72px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            
+            let text = num.toString();
+            if (sides === 10 && num === 0) text = '0'; 
+            
+            ctx.strokeText(text, 64, 64);
+            ctx.fillText(text, 64, 64);
+            
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.colorSpace = THREE.SRGBColorSpace;
+            return texture;
+        }
+
+        function createD10Geometry(radius) {
+            const vertices = [0, 0, 1, 0, 0, -1];
+            for (let i = 0; i < 10; ++i) {
+                const b = (i * Math.PI * 2) / 10;
+                vertices.push(-Math.cos(b), -Math.sin(b), 0.105 * (i % 2 ? 1 : -1));
+            }
+            const faces = [
+                [0, 2, 3], [0, 3, 4], [0, 4, 5], [0, 5, 6], [0, 6, 7],
+                [0, 7, 8], [0, 8, 9], [0, 9, 10], [0, 10, 11], [0, 11, 2],
+                [1, 3, 2], [1, 4, 3], [1, 5, 4], [1, 6, 5], [1, 7, 6],
+                [1, 8, 7], [1, 9, 8], [1, 10, 9], [1, 11, 10], [1, 2, 11]
+            ];
+            return new THREE.PolyhedronGeometry(vertices, faces.flat(), radius, 0);
+        }
+
+        function createDieMesh(sides) {
+            let geometry;
+            let isStandard = [4, 6, 8, 10, 12, 20].includes(sides);
+            let isSphere = sides > 20;
+
+            if (sides === 4) geometry = new THREE.TetrahedronGeometry(1);
+            else if (sides === 6) geometry = new THREE.BoxGeometry(1.2, 1.2, 1.2);
+            else if (sides === 8) geometry = new THREE.OctahedronGeometry(1);
+            else if (sides === 10) geometry = createD10Geometry(1);
+            else if (sides === 12) geometry = new THREE.DodecahedronGeometry(1);
+            else if (sides === 20) geometry = new THREE.IcosahedronGeometry(1);
+            else if (isSphere) geometry = new THREE.SphereGeometry(1, 32, 32);
+            else geometry = new THREE.CylinderGeometry(1, 1, 1.5, Math.max(3, sides));
+
+            const hue = Math.random() * 360;
+            const dieColor = new THREE.Color(`hsl(${hue}, 55%, 45%)`);
+            
+            const noiseTex = createOptimizedNoiseTexture();
+            noiseTex.repeat.set(2, 2); 
+            
+            const dieMat = new THREE.MeshStandardMaterial({
+                color: dieColor,
+                roughness: 0.6, 
+                roughnessMap: noiseTex,
+                bumpMap: noiseTex,
+                bumpScale: 0.01,
+                metalness: 0.05,
+                envMapIntensity: 0.0
+            });
+
+            const mesh = new THREE.Mesh(geometry, dieMat);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            
+            const inradii = { 4: 0.33, 6: 0.6, 8: 0.58, 10: 0.75, 12: 0.79, 20: 0.79 };
+            let restY = inradii[sides] !== undefined ? inradii[sides] : 1.0;
+            mesh.userData.restY = restY;
+            
+            const faces = [];
+            if (isSphere) {
+                faces.push({ normal: new THREE.Vector3(0, 0, 1), centroid: new THREE.Vector3(0, 0, 1.01), value: 1, localUp: new THREE.Vector3(0, 1, 0) });
+            } else {
+                const geo = geometry.toNonIndexed();
+                const pos = geo.attributes.position;
+                const rawFaces = [];
+                
+                for (let i = 0; i < pos.count; i += 3) {
+                    const v1 = new THREE.Vector3().fromBufferAttribute(pos, i);
+                    const v2 = new THREE.Vector3().fromBufferAttribute(pos, i + 1);
+                    const v3 = new THREE.Vector3().fromBufferAttribute(pos, i + 2);
+                    const normal = new THREE.Vector3();
+                    THREE.Triangle.getNormal(v1, v2, v3, normal);
+                    const center = v1.clone().add(v2).add(v3).divideScalar(3);
+                    if (normal.dot(center) < 0) normal.multiplyScalar(-1);
+                    
+                    let found = false;
+                    for (let face of rawFaces) {
+                        if (face.normal.distanceTo(normal) < 0.01) {
+                            face.vertices.push(v1, v2, v3);
+                            found = true; break;
+                        }
+                    }
+                    if (!found) rawFaces.push({ normal: normal.clone(), vertices: [v1, v2, v3] });
+                }
+                
+                for (let face of rawFaces) {
+                    const centroid = new THREE.Vector3();
+                    for (let v of face.vertices) centroid.add(v);
+                    centroid.divideScalar(face.vertices.length);
+                    face.centroid = centroid;
+                    if (!isStandard && Math.abs(face.normal.y) > 0.9) continue;
+                    faces.push(face);
+                }
+            }
+            
+            faces.forEach((face, index) => {
+                let num = index + 1;
+                if (sides === 10) num = index; 
+                if (isSphere) num = sides; 
+                face.value = num;
+                
+                const texture = createNumberTexture(num, sides);
+                let labelSize = 0.6;
+                if (face.vertices) {
+                    let maxDist = 0;
+                    for(let v of face.vertices) maxDist = Math.max(maxDist, v.distanceTo(face.centroid));
+                    labelSize = maxDist * 0.75;
+                }
+                if (isSphere) labelSize = 1.2;
+                
+                const planeGeo = new THREE.PlaneGeometry(labelSize, labelSize);
+                
+                const planeMat = new THREE.MeshStandardMaterial({
+                    map: texture, 
+                    transparent: true, 
+                    roughness: 0.4, 
+                    metalness: 0.0,
+                    emissiveMap: texture, 
+                    emissive: 0xffffff, 
+                    emissiveIntensity: 1.2, 
+                    polygonOffset: true, 
+                    polygonOffsetFactor: -2, 
+                    polygonOffsetUnits: -2,
+                    depthWrite: false
+                });
+                
+                const plane = new THREE.Mesh(planeGeo, planeMat);
+                plane.position.copy(face.centroid).add(face.normal.clone().multiplyScalar(0.01));
+                
+                const normal = face.normal;
+                
+                // Camera-Relative Projection: 
+                // Camera is at +Z looking at origin. Text is readable if it points -Z (North).
+                const readingDir = new THREE.Vector3(0, 0, -1); 
+                
+                // Project reading direction onto the face plane
+                let projectedUp = readingDir.clone().sub(normal.clone().multiplyScalar(readingDir.dot(normal)));
+                if (projectedUp.lengthSq() < 0.001) {
+                    // Fallback for faces perfectly perpendicular to readingDir (e.g. front/back)
+                    projectedUp.set(0, 1, 0).sub(normal.clone().multiplyScalar(normal.y)).normalize();
+                }
+                projectedUp.normalize();
+                
+                const right = new THREE.Vector3().crossVectors(projectedUp, normal).normalize();
+                const correctedUp = new THREE.Vector3().crossVectors(normal, right).normalize();
+                
+                const matrix = new THREE.Matrix4();
+                matrix.makeBasis(right, correctedUp, normal);
+                plane.quaternion.setFromRotationMatrix(matrix);
+                
+                // Store localUp for the physics snap alignment
+                face.localUp = correctedUp.clone();
+                
+                mesh.add(plane);
+                face.plane = plane;
+            });
+            
+            mesh.userData.faces = faces;
+            mesh.userData.sides = sides;
+            mesh.userData.isSphere = isSphere;
+            return mesh;
+        }
+
+        function triggerCameraShake() { shakeIntensity = 0.15; }
+
+        function rollDie(die, targetFaceIndex) {
+            if (die.userData.isSphere) {
+                const dirToCamera = camera.position.clone().sub(die.position).normalize();
+                die.userData.targetQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), dirToCamera);
+            } else {
+                const targetFace = die.userData.faces[targetFaceIndex] || die.userData.faces[0];
+                if (!targetFace) return;
+                
+                const up = new THREE.Vector3(0, 1, 0);
+                const alignmentQuat = new THREE.Quaternion().setFromUnitVectors(targetFace.normal, up);
+                
+                // Target the exact North vector for perfect readability from the South camera
+                const targetDir = new THREE.Vector3(0, 0, -1); 
+                const worldLocalUp = targetFace.localUp.clone().applyQuaternion(alignmentQuat);
+                const currentDir = new THREE.Vector3(worldLocalUp.x, 0, worldLocalUp.z).normalize();
+                
+                const angleCurrent = Math.atan2(currentDir.x, currentDir.z);
+                const angleTarget = Math.atan2(targetDir.x, targetDir.z);
+                
+                let spinAngle = angleTarget - angleCurrent;
+                // Normalize to shortest path
+                while (spinAngle > Math.PI) spinAngle -= Math.PI * 2;
+                while (spinAngle < -Math.PI) spinAngle += Math.PI * 2;
+                
+                const spinQuat = new THREE.Quaternion().setFromAxisAngle(up, spinAngle);
+                die.userData.targetQuat = spinQuat.multiply(alignmentQuat);
+            }
+            
+            die.userData.spinAxis = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
+            die.userData.totalRotations = 4 + Math.random() * 4;
+            
+            const wobbleAngle = Math.random() * Math.PI * 2;
+            die.userData.wobbleAxis = new THREE.Vector3(Math.cos(wobbleAngle), 0, Math.sin(wobbleAngle)).normalize();
+            
+            die.userData.state = 'rolling';
+            die.userData.elapsed = 0;
+            die.userData.duration = 2.0 + Math.random() * 0.5;
+            
+            die.userData.targetY = die.userData.restY;
+            die.userData.initialY = die.userData.restY + 6 + Math.random() * 2;
+            die.userData.shakeTriggered = false;
+        }
+
+        function getTopFaceIndex(die) {
+            const up = new THREE.Vector3(0, 1, 0);
+            let bestIndex = 0;
+            let maxDot = -2;
+            for (let i = 0; i < die.userData.faces.length; i++) {
+                const worldNormal = die.userData.faces[i].normal.clone().applyQuaternion(die.quaternion);
+                const dot = worldNormal.dot(up);
+                if (dot > maxDot) { maxDot = dot; bestIndex = i; }
+            }
+            return bestIndex;
+        }
+
+        function onDieFinished(die) {
+            let value;
+            if (die.userData.isSphere) {
+                value = die.userData.targetResult;
+                const face = die.userData.faces[0];
+                const newTexture = createNumberTexture(value, die.userData.sides);
+                face.plane.material.map.dispose();
+                face.plane.material.emissiveMap.dispose();
+                face.plane.material.map = newTexture;
+                face.plane.material.emissiveMap = newTexture;
+                face.plane.material.needsUpdate = true;
+                die.quaternion.copy(die.userData.targetQuat);
+            } else {
+                const faceIndex = getTopFaceIndex(die);
+                if (faceIndex >= 0 && die.userData.faces[faceIndex]) {
+                    value = die.userData.faces[faceIndex].value;
+                } else {
+                    value = 1;
+                }
+            }
+            results.push(value);
+            pendingDice--;
+            if (pendingDice === 0) {
+                calculateFinalResult(currentConfig, results);
+            }
+        }
+
+        function calculateFinalResult(config, results) {
+            results.sort((a, b) => a - b);
+            let finalResults = [...results], dropped = [];
+            
+            if (config.advantage) { const max = Math.max(...finalResults); dropped = finalResults.filter(r => r !== max); finalResults = [max]; }
+            else if (config.disadvantage) { const min = Math.min(...finalResults); dropped = finalResults.filter(r => r !== min); finalResults = [min]; }
+            else if (config.dropLow) { dropped.push(finalResults[0]); finalResults.shift(); }
+            else if (config.dropHigh) { dropped.push(finalResults[finalResults.length - 1]); finalResults.pop(); }
+            
+            const sum = finalResults.reduce((a, b) => a + b, 0);
+            let resultText = `Sum: ${sum} | Rolls: [${results.join(', ')}]`;
+            if (dropped.length > 0) resultText += ` (Dropped: ${dropped.join(', ')})`;
+            
+            const resultEl = document.getElementById('result');
+            resultEl.innerText = resultText;
+            resultEl.classList.remove('pop-anim');
+            void resultEl.offsetWidth;
+            resultEl.classList.add('pop-anim');
+        }
+
+        function parseDiceNotation(notation) {
+            notation = notation.trim().toLowerCase();
+            if (notation === 'adv' || notation === 'advantage') return { type: 20, count: 2, advantage: true, disadvantage: false, dropLow: false, dropHigh: false };
+            if (notation === 'dis' || notation === 'disadvantage') return { type: 20, count: 2, advantage: false, disadvantage: true, dropLow: false, dropHigh: false };
+            let dropLow = false, dropHigh = false;
+            if (notation.includes('drop low') || notation.includes('dl')) { dropLow = true; notation = notation.replace(/drop low|dl/g, '').trim(); }
+            if (notation.includes('drop high') || notation.includes('dh')) { dropHigh = true; notation = notation.replace(/drop high|dh/g, '').trim(); }
+            const match = notation.match(/(\d+)?d(\d+)/);
+            if (match) return { type: parseInt(match[2]), count: match[1] ? parseInt(match[1]) : 1, advantage: false, disadvantage: false, dropLow, dropHigh };
+            return null;
+        }
+
+        window.rollNotation = function(notation) {
+            const config = parseDiceNotation(notation);
+            if (!config) { document.getElementById('result').innerText = "Invalid notation"; return; }
+            
+            dice.forEach(d => scene.remove(d));
+            dice = [];
+            currentConfig = config;
+            
+            shakeIntensity = 0;
+            cooldownTime = 0;
+            
+            updateCameraForCount(config.count);
+            
+            for (let i = 0; i < config.count; i++) {
+                const pos = new THREE.Vector3((i - (config.count - 1) / 2) * 2.5, 4, 0);
+                const die = createDieMesh(config.type);
+                scene.add(die);
+                die.position.copy(pos);
+                dice.push(die);
+                if (die.userData.isSphere) die.userData.targetResult = Math.floor(Math.random() * config.type) + 1;
+                rollDie(die, Math.floor(Math.random() * die.userData.faces.length));
+            }
+            pendingDice = config.count;
+            results = [];
+            
+            const resultEl = document.getElementById('result');
+            resultEl.innerText = "Rolling...";
+            resultEl.classList.remove('pop-anim');
+
+            startAnimationLoop();
+        }
+
+        function startAnimationLoop() {
+            if (!isAnimating) {
+                isAnimating = true;
+                clock.start();
+                animate();
+            }
+        }
+
+        function stopAnimationLoop() {
+            isAnimating = false;
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+                animationFrameId = null;
+            }
+        }
+
+        function renderOnce() { renderer.render(scene, camera); }
+
+        function animate() {
+            if (!isAnimating) return;
+            animationFrameId = requestAnimationFrame(animate);
+            
+            const delta = clock.getDelta();
+            
+            let allIdle = true;
+            dice.forEach(die => {
+                if (die.userData.state === 'rolling') {
+                    allIdle = false;
+                    die.userData.elapsed += delta;
+                    const t = Math.min(die.userData.elapsed / die.userData.duration, 1);
+
+                    let y;
+                    if (t < 0.4) {
+                        y = THREE.MathUtils.lerp(die.userData.initialY, die.userData.targetY, easeInQuad(t / 0.4));
+                    } else {
+                        const bounceT = (t - 0.4) / 0.6;
+                        const decay = Math.exp(-bounceT * 6);
+                        y = die.userData.targetY + Math.abs(Math.sin(bounceT * 12)) * 0.3 * decay;
+                    }
+                    die.position.y = y;
+
+                    if (t >= 0.4 && t < 0.45 && !die.userData.shakeTriggered) {
+                        die.userData.shakeTriggered = true;
+                        triggerCameraShake();
+                    }
+
+                    const rotDecay = 1 - easeOutQuint(t); 
+                    const mainAngle = die.userData.totalRotations * Math.PI * 2 * rotDecay;
+                    const qMain = new THREE.Quaternion().setFromAxisAngle(die.userData.spinAxis, mainAngle);
+                    
+                    const qWobble = new THREE.Quaternion();
+                    if (t > 0.7) {
+                        const wt = (t - 0.7) / 0.3;
+                        const wobbleDecay = Math.exp(-wt * 10);
+                        const wobbleAngle = Math.sin(wt * 25) * 0.08 * wobbleDecay; 
+                        qWobble.setFromAxisAngle(die.userData.wobbleAxis, wobbleAngle);
+                    }
+                    
+                    die.quaternion.copy(die.userData.targetQuat)
+                        .premultiply(qMain)
+                        .premultiply(qWobble);
+
+                    if (t >= 1) {
+                        die.quaternion.copy(die.userData.targetQuat);
+                        die.userData.state = 'idle';
+                        onDieFinished(die);
+                    }
+                }
+            });
+
+            if (shakeIntensity > 0) {
+                camera.position.x = originalCamPos.x + (Math.random() - 0.5) * shakeIntensity;
+                camera.position.y = originalCamPos.y + (Math.random() - 0.5) * shakeIntensity;
+                shakeIntensity *= Math.exp(-10 * delta);
+                if (shakeIntensity < 0.001) {
+                    camera.position.copy(originalCamPos);
+                    shakeIntensity = 0;
+                }
+            }
+            
+            if (pendingDice === 0 && allIdle && cooldownTime === 0) {
+                cooldownTime = 2.0;
+            }
+            if (cooldownTime > 0) {
+                cooldownTime -= delta;
+            }
+            
+            renderer.render(scene, camera);
+
+            if (allIdle && pendingDice === 0 && cooldownTime <= 0 && shakeIntensity === 0) {
+                stopAnimationLoop();
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            
+            renderer.render(scene, camera);
+            if (!isAnimating) {
+                requestAnimationFrame(() => renderer.render(scene, camera));
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>
